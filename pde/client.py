@@ -1,204 +1,24 @@
 import copy
-import gzip
-import io
 import os
 import re
 import textwrap
 import threading
-import warnings
-import urllib.request as urllib_request
+
 import queue
 import obspy
-from obspy import UTCDateTime, read_inventory
-from obspy.core.compatibility import collections_abc
+from obspy import read_inventory
 from obspy.clients.fdsn.header import (DEFAULT_USER_AGENT, FDSNWS,
-                     OPTIONAL_PARAMETERS,  URL_MAPPING_SUBPATHS,
+                     URL_MAPPING_SUBPATHS,
                      WADL_PARAMETERS_NOT_TO_BE_PARSED,
-                     FDSNException, FDSNRedirectException, FDSNNoDataException,
+                    FDSNRedirectException,
                      FDSNTimeoutException,
-                     FDSNBadRequestException, FDSNNoServiceException,
-                     FDSNInternalServerException,
-                     FDSNNotImplementedException,
-                     FDSNBadGatewayException,
-                     FDSNTooManyRequestsException,
-                     FDSNRequestTooLargeException,
-                     FDSNServiceUnavailableException,
-                     FDSNUnauthorizedException,
-                     FDSNForbiddenException,
-                     FDSNDoubleAuthenticationException,
-                     FDSNInvalidRequestException)
+                     FDSNNoServiceException,
+                     FDSNDoubleAuthenticationException)
 from obspy.clients.fdsn.wadl_parser import WADLParser
-from obspy.clients.fdsn.client import download_url
-from urllib.parse import urlencode
 from collections import OrderedDict
-from http.client import HTTPException, IncompleteRead
 from socket import timeout as socket_timeout
-from lxml import etree
-
-
-DEFAULT_SERVICE_VERSIONS = {'dataselect': 1, 'station': 1, 'event': 1}
-URL_MAPPINGS = {
-    "MAP": "http://10.99.12.109:38080"
-}
-URL_DEFAULT_SUBPATH = None
-DEFAULT_DATASELECT_PARAMETERS = [
-    "site", "dataType", "device", "startTime", "endTime"]
-DEFAULT_STATION_PARAMETERS = [
-    "site", "dataType", "device"
-]
-DEFAULT_EVENT_PARAMETERS = [
-   "startTime", "endTime"
-]
-
-DEFAULT_PARAMETERS = {
-    "dataselect": DEFAULT_DATASELECT_PARAMETERS,
-    "event": DEFAULT_EVENT_PARAMETERS,
-    "station": DEFAULT_STATION_PARAMETERS}
-
-PARAMETER_ALIASES = {
-    "site": "site",
-    "dataType": "dataType",
-    "device": "device",
-    "startTime": "startTime",
-    "endTime": "endTime",
-    "net": "network",
-    "sta": "station",
-    "loc": "location",
-    "cha": "channel",
-    "start": "starttime",
-    "end": "endtime",
-    "minlat": "minlatitude",
-    "maxlat": "maxlatitude",
-    "minlon": "minlongitude",
-    "maxlon": "maxlongitude",
-    "lat": "latitude",
-    "lon": "longitude",
-    "minmag": "minmagnitude",
-    "maxmag": "maxmagnitude",
-    "magtype": "magnitudetype",
-}
-
-DEFAULT_VALUES = {
-    "site": None,
-    "dataType": None,
-    "device": None,
-    "startTime": None,
-    "endTime": None,
-    "starttime": None,
-    "endtime": None,
-    "network": None,
-    "station": None,
-    "location": None,
-    "channel": None,
-    "quality": "B",
-    "minimumlength": 0.0,
-    "longestonly": False,
-    "startbefore": None,
-    "startafter": None,
-    "endbefore": None,
-    "endafter": None,
-    "maxlongitude": 180.0,
-    "minlongitude": -180.0,
-    "longitude": 0.0,
-    "maxlatitude": 90.0,
-    "minlatitude": -90.0,
-    "latitude": 0.0,
-    "maxdepth": None,
-    "mindepth": None,
-    "maxmagnitude": None,
-    "minmagnitude": None,
-    "magnitudetype": None,
-    "maxradius": 180.0,
-    "minradius": 0.0,
-    "level": "station",
-    "includerestricted": True,
-    "includeavailability": False,
-    "includeallorigins": False,
-    "includeallmagnitudes": False,
-    "includearrivals": False,
-    "matchtimeseries": False,
-    "eventid": None,
-    "eventtype": None,
-    "limit": None,
-    "offset": 1,
-    "orderby": "time",
-    "catalog": None,
-    "contributor": None,
-    "updatedafter": None,
-}
-DEFAULT_TYPES = {
-    "site": list,
-    "dataType": list,
-    "device": list,
-    "startTime": UTCDateTime,
-    "endTime": UTCDateTime,
-    "starttime": UTCDateTime,
-    "endtime": UTCDateTime,
-    "network": str,
-    "station": str,
-    "location": str,
-    "channel": str,
-    "quality": str,
-    "minimumlength": float,
-    "longestonly": bool,
-    "startbefore": UTCDateTime,
-    "startafter": UTCDateTime,
-    "endbefore": UTCDateTime,
-    "endafter": UTCDateTime,
-    "maxlongitude": float,
-    "minlongitude": float,
-    "longitude": float,
-    "maxlatitude": float,
-    "minlatitude": float,
-    "latitude": float,
-    "maxdepth": float,
-    "mindepth": float,
-    "maxmagnitude": float,
-    "minmagnitude": float,
-    "magnitudetype": str,
-    "maxradius": float,
-    "minradius": float,
-    "level": str,
-    "includerestricted": bool,
-    "includeavailability": bool,
-    "includeallorigins": bool,
-    "includeallmagnitudes": bool,
-    "includearrivals": bool,
-    "matchtimeseries": bool,
-    "eventid": str,
-    "eventtype": str,
-    "limit": int,
-    "offset": int,
-    "orderby": str,
-    "catalog": str,
-    "contributor": str,
-    "updatedafter": UTCDateTime,
-    "format": str}
-DEFAULT_SERVICES = {}
-for service in ["dataselect", "event", "station"]:
-    DEFAULT_SERVICES[service] = {}
-
-    for default_param in DEFAULT_PARAMETERS[service]:
-        DEFAULT_SERVICES[service][default_param] = {
-            "default_value": DEFAULT_VALUES[default_param],
-            "type": DEFAULT_TYPES[default_param],
-            "required": False,
-        }
-
-    for optional_param in OPTIONAL_PARAMETERS[service]:
-        if optional_param == "format":
-            if service == "dataselect":
-                default_val = "miniseed"
-            else:
-                default_val = "xml"
-        else:
-            default_val = DEFAULT_VALUES[optional_param]
-
-        DEFAULT_SERVICES[service][optional_param] = {
-            "default_value": default_val,
-            "type": DEFAULT_TYPES[optional_param],
-            "required": False,
-        }
+from pde.constant import *
+from pde.util import *
 
 
 class CustomRedirectHandler(urllib_request.HTTPRedirectHandler):
@@ -297,13 +117,11 @@ class Client(object):
         else:
             return False
 
-    def __init__(self, base_url="MAP", major_versions=None, user=None,
-                 password=None, user_agent=DEFAULT_USER_AGENT, debug=False,
+    def __init__(self, base_url="MAP", major_versions=None, user_agent=DEFAULT_USER_AGENT, debug=False,
                  timeout=120, service_mappings=None, force_redirect=False,
                  sa_token=None, _discover_services=True):
 
         self.debug = debug
-        self.user = user
         self.timeout = timeout
         self._force_redirect = force_redirect
 
@@ -333,10 +151,9 @@ class Client(object):
             raise ValueError(msg)
 
         self.base_url = base_url
-        self.url_subpath = "map"
-
+        self.url_subpath = DEFAULT_SUB_PATH
         # 如果输入了用户名密码则需要加入认证处理
-        self._set_opener(user, password)
+        self._set_opener()
 
         self.request_headers = {"User-Agent": user_agent}
         # Avoid mutable kwarg.
@@ -345,6 +162,22 @@ class Client(object):
         # Make a copy to avoid overwriting the default service versions.
         self.major_versions = DEFAULT_SERVICE_VERSIONS.copy()
         self.major_versions.update(major_versions)
+
+        self.sa_token = sa_token
+        # 如果指定token了就使用用户指定的token
+        if self.sa_token is not None:
+            # 将token加入到请求头里面
+            self.set_eida_token(self.sa_token)
+            # 先判断用户输入的token是否合法，不合法会抛出异常
+            self._validate_token()
+            # 将用户这次输入的token保存到本地
+            self._save_token_local()
+        else:
+            # 没有指定则会去从本地获取，获取失败也会抛异常
+            self._get_token_local()
+            # 将token加入到请求头里面
+            self.set_eida_token(self.sa_token)
+
 
         # Avoid mutable kwarg.
         if service_mappings is None:
@@ -366,21 +199,9 @@ class Client(object):
         #     self.services = DEFAULT_SERVICES
         self.services = DEFAULT_SERVICES
 
-        # Use EIDA token if provided - this requires setting new url openers.
-        #
-        # This can only happen after the services have been discovered as
-        # the clients needs to know if the fdsnws implementation has support
-        # for the EIDA token system.
-        #
-        # This is a non-standard feature but we support it, given the number
-        # of EIDA nodes out there.
-        if sa_token is not None:
-            # Make sure user/pw are not also given.
-            if user is not None or password is not None:
-                msg = ("EIDA authentication token provided, but "
-                       "user and password are also given.")
-                raise FDSNDoubleAuthenticationException(msg)
-            self.set_eida_token(sa_token)
+
+
+
 
     @property
     def _has_sa_token(self):
@@ -398,44 +219,34 @@ class Client(object):
         """
         self.request_headers["satoken"] = token
 
-    def _set_opener(self, user, password):
+    def _set_opener(self):
         # Only add the authentication handler if required.
         handlers = []
-        if user is not None and password is not None:
-            # Create an OpenerDirector for HTTP Digest Authentication
-            password_mgr = urllib_request.HTTPPasswordMgrWithDefaultRealm()
-            password_mgr.add_password(None, self.base_url, user, password)
-            handlers.append(urllib_request.HTTPDigestAuthHandler(password_mgr))
-
-        if (user is None and password is None) or self._force_redirect is True:
-            # Redirect if no credentials are given or the force_redirect
-            # flag is True.
-            handlers.append(CustomRedirectHandler())
-        else:
-            handlers.append(NoRedirectionHandler())
-
-        # Don't install globally to not mess with other codes.
+        handlers.append(CustomRedirectHandler())
         self._url_opener = urllib_request.build_opener(*handlers)
         if self.debug:
             print('Installed new opener with handlers: {!s}'.format(handlers))
 
-    def get_waveforms(self, site, dataType, device, startTime,
-                      endTime, filename=None, attach_response=False, **kwargs):
+    def get_map_waveforms(self, site, dataType=None, device=None, startTime=None,
+                          endTime=None, filename=None, attach_response=False, **kwargs):
 
-        if "dataselect" not in self.services:
-            msg = "The current client does not have a dataselect service."
+        if "dataselect1" not in self.services:
+            msg = "The current client does not have a dataselect1 service."
             raise ValueError(msg)
-
+        if dataType is None:
+            dataType = []
+        if device is None:
+            device = []
         locs = locals()
-        setup_query_dict('dataselect', locs, kwargs)
+        setup_query_dict('dataselect1', locs, kwargs)
 
         # Special location handling. Convert empty strings to "--".
         # if "location" in kwargs and not kwargs["location"]:
         #     kwargs["location"] = "--"
 
         url = self._create_url_from_parameters(
-            "dataselect", DEFAULT_PARAMETERS['dataselect'], kwargs)
-
+            "dataselect1", DEFAULT_PARAMETERS['dataselect1'], kwargs)
+        # url = "http://localhost:38085/dataselect/1/query?site=1&dataType=1&device=1%2C2&startTime=2023-03-07+12%3A00%3A00&endTime=2023-03-07+12%3A00%3A01"
         # Gzip not worth it for MiniSEED and most likely disabled for this
         # route in any case.
         data_stream = self._download(url, use_gzip=False)
@@ -448,7 +259,39 @@ class Client(object):
             data_stream.close()
             if attach_response:
                 self._attach_responses(st)
-            self._attach_dataselect_url_to_stream(st)
+            self._attach_dataselect_url_to_stream("dataselect1", st)
+            # st.trim(startTime, endTime)
+            return st
+
+    def get_obspy_waveforms(self, network="*", station="*", location="*", channel="*", startTime=None,
+                          endTime=None, filename=None, attach_response=False, **kwargs):
+
+        if "dataselect2" not in self.services:
+            msg = "The current client does not have a dataselect2 service."
+            raise ValueError(msg)
+        locs = locals()
+        setup_query_dict('dataselect2', locs, kwargs)
+
+        # Special location handling. Convert empty strings to "--".
+        # if "location" in kwargs and not kwargs["location"]:
+        #     kwargs["location"] = "--"
+
+        url = self._create_url_from_parameters(
+            "dataselect2", DEFAULT_PARAMETERS['dataselect2'], kwargs)
+        # url = "http://localhost:38085/dataselect/1/query?site=1&dataType=1&device=1%2C2&startTime=2023-03-07+12%3A00%3A00&endTime=2023-03-07+12%3A00%3A01"
+        # Gzip not worth it for MiniSEED and most likely disabled for this
+        # route in any case.
+        data_stream = self._download(url, use_gzip=False)
+        data_stream.seek(0, 0)
+        if filename:
+            self._write_to_file_object(filename, data_stream)
+            data_stream.close()
+        else:
+            st = obspy.read(data_stream)
+            data_stream.close()
+            if attach_response:
+                self._attach_responses(st)
+            self._attach_dataselect_url_to_stream("dataselect2", st)
             # st.trim(startTime, endTime)
             return st
 
@@ -499,8 +342,6 @@ class Client(object):
             data_stream.close()
             return inventory
 
-
-
     def _attach_responses(self, st):
         """
         Helper method to fetch response via get_stations() and attach it to
@@ -526,66 +367,6 @@ class Client(object):
             except Exception as e:
                 warnings.warn(str(e))
         st.attach_response(inventories)
-
-    def get_waveforms_bulk(self, bulk, quality=None, minimumlength=None,
-                           longestonly=None, filename=None,
-                           attach_response=False, **kwargs):
-
-        if "dataselect" not in self.services:
-            msg = "The current client does not have a dataselect service."
-            raise ValueError(msg)
-
-        arguments = OrderedDict(
-            quality=quality,
-            minimumlength=minimumlength,
-            longestonly=longestonly
-        )
-        bulk = get_bulk_string(bulk, arguments)
-
-        url = self._build_url("dataselect", "query")
-
-        data_stream = self._download(
-            url, data=bulk, content_type='text/plain')
-        data_stream.seek(0, 0)
-        if filename:
-            self._write_to_file_object(filename, data_stream)
-            data_stream.close()
-        else:
-            st = obspy.read(data_stream, format="MSEED")
-            data_stream.close()
-            if attach_response:
-                self._attach_responses(st)
-            self._attach_dataselect_url_to_stream(st)
-            return st
-
-    def get_stations_bulk(self, bulk, level=None, includerestricted=None,
-                          includeavailability=None, filename=None, **kwargs):
-
-        if "station" not in self.services:
-            msg = "The current client does not have a station service."
-            raise ValueError(msg)
-
-        arguments = OrderedDict(
-            level=level,
-            includerestricted=includerestricted,
-            includeavailability=includeavailability
-        )
-        bulk = get_bulk_string(bulk, arguments)
-
-        url = self._build_url("station", "query")
-
-        data_stream = self._download(
-            url, data=bulk, content_type='text/plain')
-        data_stream.seek(0, 0)
-        if filename:
-            self._write_to_file_object(filename, data_stream)
-            data_stream.close()
-            return
-        else:
-            # Works with text and StationXML data.
-            inv = obspy.read_inventory(data_stream)
-            data_stream.close()
-            return inv
 
     def _write_to_file_object(self, filename_or_object, data_stream):
         if hasattr(filename_or_object, "write"):
@@ -802,11 +583,11 @@ class Client(object):
         headers = self.request_headers.copy()
         if content_type:
             headers['Content-Type'] = content_type
-        code, data = download_url(
+        code, message, data = download_url(
             url, opener=self._url_opener, headers=headers,
             debug=self.debug, return_string=return_string, data=data,
             timeout=self.timeout, use_gzip=use_gzip)
-        raise_on_error(code, data)
+        raise_on_error(code, data, message)
         return data
 
     def _build_url(self, service, resource_type, parameters={}):
@@ -816,10 +597,7 @@ class Client(object):
         Replaces "query" with "queryauth" if client has authentication
         information.
         """
-        # authenticated dataselect queries have different target URL
-        if self.user is not None:
-            if service == "dataselect" and resource_type == "query":
-                resource_type = "queryauth"
+
         return build_url(self.base_url, service, self.major_versions[service],
                          resource_type, parameters,
                          service_mappings=self._service_mappings,
@@ -1003,362 +781,88 @@ class Client(object):
         version = self.get_webservice_version(service)
         return ".".join(map(str, version))
 
-    def _attach_dataselect_url_to_stream(self, st):
+    def _attach_dataselect_url_to_stream(self,service, st):
         """
         Attaches the actually used dataselet URL to each Trace.
         """
-        url = self._build_url("dataselect", "query")
+        url = self._build_url(service, "query")
         for tr in st:
             tr.stats._fdsnws_dataselect_url = url
 
+    def _validate_token(self):
+        """
+        检查token是否有效
+        :return:
+        """
+        headers = self.request_headers.copy()
+        code, message, data = download_url(
+            IS_LOGIN_URL, opener=self._url_opener, headers=headers,
+            debug=self.debug, timeout=self.timeout)
+        # 只要code不是200就是token存在问题
+        if code != 200:
+            raise FDSNException("There is a problem with your token, if this is your first time using it, \n"
+                                "please go to 'http://10.99.12.109:38090/login' to register an account to get the \n "
+                                "token, and initialize the token the first time you use it. The specific reasons are:\n"
+                                + message)
 
-def convert_to_string(value):
-    if isinstance(value, str):
-        return value
-    # Boolean test must come before integer check!
-    elif isinstance(value, bool):
-        return str(value).lower()
-    elif isinstance(value, int):
-        return str(value)
-    elif isinstance(value, float):
-        return str(value)
-    elif isinstance(value, UTCDateTime):
-        return (value + 8 * 36000).strftime("%Y-%m-%d %H:%M:%S")
-    elif isinstance(value, list):
-        str_value = [str(x) for x in value]
-        return ",".join(str_value)
-    else:
-        raise TypeError("Unexpected type %s" % repr(value))
+    def _get_token_local(self):
+        """
+        从本地获取token
+        :return:
+        """
+        user_home = os.path.expanduser('~')
+        file_path = user_home + "\\pde\\token"
+        if not os.path.exists(file_path):
+            raise FDSNException("There is no token locally, if this is your first time using it, \n please go to "
+                                "'http://10.99.12.109:38090/login' to register an account to get the token, \n and "
+                                "initialize the token the first time you use it.")
+        with open(file_path) as f:
+            token = f.read()
+        self.sa_token = token
 
-
-def build_url(base_url, service, major_version, resource_type,
-              parameters=None, service_mappings=None, subpath='fdsnws'):
-    # Avoid mutable kwargs.
-    if parameters is None:
-        parameters = {}
-    if service_mappings is None:
-        service_mappings = {}
-
-    # Only allow certain resource types.
-    if service not in ["dataselect", "event", "station"]:
-        msg = "Resource type '%s' not allowed. Allowed types: \n%s" % \
-            (service, ",".join(("dataselect", "event", "station")))
-        raise ValueError(msg)
-
-    # Special location handling.
-    if "location" in parameters:
-        loc = parameters["location"].replace(" ", "")
-        # Empty location.
-        if not loc:
-            loc = "--"
-        # Empty location at start of list.
-        if loc.startswith(','):
-            loc = "--" + loc
-        # Empty location at end of list.
-        if loc.endswith(','):
-            loc += "--"
-        # Empty location in middle of list.
-        loc = loc.replace(",,", ",--,")
-        parameters["location"] = loc
-
-    # Apply per-service mappings if any.
-    if service in service_mappings:
-        url = "/".join((service_mappings[service], resource_type))
-    else:
-        if subpath is None:
-            parts = (base_url, service, str(major_version),
-                     resource_type)
-        else:
-            parts = (base_url, subpath.lstrip('/'), service,
-                     str(major_version), resource_type)
-        url = "/".join(parts)
-
-    if parameters:
-        # Strip parameters.
-        for key, value in parameters.items():
-            try:
-                parameters[key] = value.strip()
-            except Exception:
-                pass
-        url = "?".join((url, urlencode(parameters)))
-    return url
-
-
-def raise_on_error(code, data):
-    """
-    Raise an error for non-200 HTTP response codes
-
-    :type code: int
-    :param code: HTTP response code
-    :type data: :class:`io.BytesIO`
-    :param data: Data returned by the server
-    """
-    # get detailed server response message
-    if code != 200:
-        try:
-            server_info = data.read()
-        except Exception:
-            server_info = None
-        else:
-            server_info = server_info.decode('ASCII', errors='ignore')
-        if server_info:
-            server_info = "\n".join(
-                line for line in server_info.splitlines() if line)
-    # No data.
-    if code == 204:
-        raise FDSNNoDataException("No data available for request.",
-                                  server_info)
-    elif code == 400:
-        msg = ("Bad request. If you think your request was valid "
-               "please contact the developers.")
-        raise FDSNBadRequestException(msg, server_info)
-    elif code == 401:
-        raise FDSNUnauthorizedException("Unauthorized, authentication "
-                                        "required.", server_info)
-    elif code == 403:
-        raise FDSNForbiddenException("Authentication failed.",
-                                     server_info)
-    elif code == 413:
-        raise FDSNRequestTooLargeException("Request would result in too much "
-                                           "data. Denied by the datacenter. "
-                                           "Split the request in smaller "
-                                           "parts", server_info)
-    # Request URI too large.
-    elif code == 414:
-        msg = ("The request URI is too large. Please contact the ObsPy "
-               "developers.", server_info)
-        raise NotImplementedError(msg)
-    elif code == 429:
-        msg = ("Sent too many requests in a given amount of time ('rate "
-               "limiting'). Wait before making a new request.", server_info)
-        raise FDSNTooManyRequestsException(msg, server_info)
-    elif code == 500:
-        raise FDSNInternalServerException("Service responds: Internal server "
-                                          "error", server_info)
-    elif code == 501:
-        raise FDSNNotImplementedException("Service responds: Not implemented ",
-                                          server_info)
-    elif code == 502:
-        raise FDSNBadGatewayException("Service responds: Bad gateway ",
-                                      server_info)
-    elif code == 503:
-        raise FDSNServiceUnavailableException("Service temporarily "
-                                              "unavailable",
-                                              server_info)
-    elif code is None:
-        if "timeout" in str(data).lower() or "timed out" in str(data).lower():
-            raise FDSNTimeoutException("Timed Out")
-        else:
-            raise FDSNException("Unknown Error (%s): %s" % (
-                (str(data.__class__.__name__), str(data))))
-    # Catch any non 200 codes.
-    elif code != 200:
-        raise FDSNException("Unknown HTTP code: %i" % code, server_info)
-
-
-def download_url(url, opener, timeout=10, headers={}, debug=False,
-                 return_string=True, data=None, use_gzip=True):
-    """
-    Returns a pair of tuples.
-
-    The first one is the returned HTTP code and the second the data as
-    string.
-
-    Will return a tuple of Nones if the service could not be found.
-    All encountered exceptions will get raised unless `debug=True` is
-    specified.
-
-    Performs a http GET if data=None, otherwise a http POST.
-    """
-    if debug is True:
-        print("Downloading %s %s requesting gzip compression" % (
-            url, "with" if use_gzip else "without"))
-        if data:
-            print("Sending along the following payload:")
-            print("-" * 70)
-            print(data.decode())
-            print("-" * 70)
-    try:
-        request = urllib_request.Request(url=url, headers=headers)
-        # Request gzip encoding if desired.
-        if use_gzip:
-            request.add_header("Accept-encoding", "gzip")
-        url_obj = opener.open(request, timeout=timeout, data=data)
-    # Catch HTTP errors.
-    except urllib_request.HTTPError as e:
-        if debug is True:
-            msg = "HTTP error %i, reason %s, while downloading '%s': %s" % \
-                  (e.code, str(e.reason), url, e.read())
-            print(msg)
-        else:
-            # Without this line we will get unclosed sockets
-            e.read()
-        return e.code, e
-    except Exception as e:
-        if debug is True:
-            print("Error while downloading: %s" % url)
-        return None, e
-
-    code = url_obj.getcode()
-
-    # Unpack gzip if necessary.
-    if url_obj.info().get("Content-Encoding") == "gzip":
-        if debug is True:
-            print("Uncompressing gzipped response for %s" % url)
-        # Cannot directly stream to gzip from urllib!
-        # http://www.enricozini.org/2011/cazzeggio/python-gzip/
-        try:
-            reader = url_obj.read()
-        except IncompleteRead:
-            msg = 'Problem retrieving data from datacenter. '
-            msg += 'Try reducing size of request.'
-            raise HTTPException(msg)
-        buf = io.BytesIO(reader)
-        buf.seek(0, 0)
-        f = gzip.GzipFile(fileobj=buf)
-    else:
-        f = url_obj
-
-    if return_string is False:
-        data = io.BytesIO(f.read())
-    else:
-        data = f.read()
-
-    if debug is True:
-        print("Downloaded %s with HTTP code: %i" % (url, code))
-
-    return code, data
-
-
-def setup_query_dict(service, locs, kwargs):
-    """
-    """
-    # check if alias is used together with the normal parameter
-    for key in kwargs:
-        if key in PARAMETER_ALIASES:
-            if locs[PARAMETER_ALIASES[key]] is not None:
-                msg = ("two parameters were provided for the same option: "
-                       "%s, %s" % (key, PARAMETER_ALIASES[key]))
-                raise FDSNInvalidRequestException(msg)
-    # short aliases are not mentioned in the downloaded WADLs, so we have
-    # to map it here according to the official FDSN WS documentation
-    for key in list(kwargs.keys()):
-        if key in PARAMETER_ALIASES:
-            value = kwargs.pop(key)
-            if value is not None:
-                kwargs[PARAMETER_ALIASES[key]] = value
-
-    for param in DEFAULT_PARAMETERS[service]:
-        param = PARAMETER_ALIASES.get(param, param)
-        value = locs[param]
-        if value is not None:
-            kwargs[param] = value
-
-
-def parse_simple_xml(xml_string):
-    """
-    Simple helper function for parsing the Catalog and Contributor availability
-    files.
-
-    Parses XMLs of the form::
-
-        <Bs>
-            <total>4</total>
-            <B>1</B>
-            <B>2</B>
-            <B>3</B>
-            <B>4</B>
-        </Bs>
-
-    and return a dictionary with a single item::
-
-        {"Bs": set(("1", "2", "3", "4"))}
-    """
-    root = etree.fromstring(xml_string.strip())
-
-    if not root.tag.endswith("s"):
-        msg = "Could not parse the XML."
-        raise ValueError(msg)
-    child_tag = root.tag[:-1]
-    children = [i.text for i in root if i.tag == child_tag]
-
-    return {root.tag.lower(): set(children)}
-
-
-def get_bulk_string(bulk, arguments):
-    if not bulk:
-        msg = ("Empty 'bulk' parameter potentially leading to a FDSN request "
-               "of all available data")
-        raise FDSNInvalidRequestException(msg)
-    # If its an iterable, we build up the query string from it
-    # StringIO objects also have __iter__ so check for 'read' as well
-    if isinstance(bulk, collections_abc.Iterable) \
-            and not hasattr(bulk, "read") \
-            and not isinstance(bulk, str):
-        tmp = ["%s=%s" % (key, convert_to_string(value))
-               for key, value in arguments.items() if value is not None]
-        # empty location codes have to be represented by two dashes
-        tmp += [" ".join((net, sta, loc or "--", cha,
-                          convert_to_string(t1), convert_to_string(t2)))
-                for net, sta, loc, cha, t1, t2 in bulk]
-        bulk = "\n".join(tmp)
-    else:
-        if any([value is not None for value in arguments.values()]):
-            msg = ("Parameters %s are ignored when request data is "
-                   "provided as a string or file!")
-            warnings.warn(msg % arguments.keys())
-        # if it has a read method, read data from there
-        if hasattr(bulk, "read"):
-            bulk = bulk.read()
-        elif isinstance(bulk, str):
-            # check if bulk is a local file
-            if "\n" not in bulk and os.path.isfile(bulk):
-                with open(bulk, 'r') as fh:
-                    tmp = fh.read()
-                bulk = tmp
-            # just use bulk as input data
-            else:
-                pass
-        else:
-            msg = ("Unrecognized input for 'bulk' argument. Please "
-                   "contact developers if you think this is a bug.")
-            raise NotImplementedError(msg)
-
-    if hasattr(bulk, "encode"):
-        bulk = bulk.encode("ascii")
-    return bulk
-
-
-def _validate_eida_token(token):
-    """
-    Just a basic check if the string contains something that looks like a PGP
-    message
-    """
-    if re.search(pattern='BEGIN PGP MESSAGE', string=token,
-                 flags=re.IGNORECASE):
-        return True
-    elif re.search(pattern='BEGIN PGP SIGNED MESSAGE', string=token,
-                   flags=re.IGNORECASE):
-        return True
-    return False
+    def _save_token_local(self):
+        user_home = os.path.expanduser('~')
+        dir = user_home + "\\pde"
+        if not os.path.exists(dir):
+            os.mkdir(dir)
+        file_path = dir + "\\token"
+        with open(file_path, "w") as f:
+            f.write(self.sa_token)
 
 
 if __name__ == '__main__':
-    client = Client(sa_token="42936707-b2de-43de-b25c-8da50daca6e8")
+    client = Client()
+
 
     # 通过Client获取波形数据
-    st = client.get_waveforms([1], [1], [1, 2, 3], UTCDateTime("2023-03-07 12:00:00"), UTCDateTime("2023-03-07 12:10:00"))
+    st = client.get_map_waveforms([1], [1], [1, 2], startTime=UTCDateTime("2023-03-07 12:00:01"), endTime=UTCDateTime("2023-03-07 12:01:00"))
     print(st)
 
+    # 对数据进行绘图
+    for trace in st:
+        trace.plot()
+
+    # st1 = client.get_obspy_waveforms(station="I57*", startTime="2023-04-08 12:00:00", endTime="2023-04-08 12:00:01")
+    # print(st1)
     # 通过Client去获取站点数据
     inventory = client.get_stations([1], [1], [1])
     print(inventory)
+
+    net = inventory[0]
+    print(net)
+    # 获取所有的站点信息
+    for station in net:
+        print(station)
 
     # 通过Client获取事件数据
     t1 = UTCDateTime("2023-02-19T04:12:10")
     t2 = UTCDateTime("2023-02-19T09:12:10")
     events = client.get_events(startTime="2023-02-19 12:12:10", endTime="2023-02-19 17:12:13")
     print(events)
+
+    # 获取所有的事件信息
+    for event in events:
+        print(event)
     # data_stream.seek(0, 0)
     # st = obspy.read(data_stream, format="MSEED")
     # data_stream.close()
