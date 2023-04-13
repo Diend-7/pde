@@ -1,5 +1,4 @@
 import copy
-import os
 import re
 import textwrap
 import threading
@@ -8,17 +7,14 @@ import queue
 import obspy
 from obspy import read_inventory
 from obspy.clients.fdsn.header import (DEFAULT_USER_AGENT, FDSNWS,
-                     URL_MAPPING_SUBPATHS,
-                     WADL_PARAMETERS_NOT_TO_BE_PARSED,
-                    FDSNRedirectException,
-                     FDSNTimeoutException,
-                     FDSNNoServiceException,
-                     FDSNDoubleAuthenticationException)
+                                       URL_MAPPING_SUBPATHS,
+                                       WADL_PARAMETERS_NOT_TO_BE_PARSED,
+                                       FDSNRedirectException,
+                                       FDSNNoServiceException)
 from obspy.clients.fdsn.wadl_parser import WADLParser
-from collections import OrderedDict
 from socket import timeout as socket_timeout
-from pde.constant import *
-from pde.util import *
+from .constant import *
+from .util import *
 
 
 class CustomRedirectHandler(urllib_request.HTTPRedirectHandler):
@@ -811,7 +807,7 @@ class Client(object):
         :return:
         """
         user_home = os.path.expanduser('~')
-        file_path = user_home + "\\pde\\token"
+        file_path = user_home + "\\map_pde\\token"
         if not os.path.exists(file_path):
             raise FDSNException("There is no token locally, if this is your first time using it, \n please go to "
                                 "'http://10.99.12.109:38090/login' to register an account to get the token, \n and "
@@ -822,7 +818,7 @@ class Client(object):
 
     def _save_token_local(self):
         user_home = os.path.expanduser('~')
-        dir = user_home + "\\pde"
+        dir = user_home + "\\map_pde"
         if not os.path.exists(dir):
             os.mkdir(dir)
         file_path = dir + "\\token"
@@ -831,7 +827,7 @@ class Client(object):
 
 
 if __name__ == '__main__':
-    client = Client()
+    client = Client(sa_token="d72b9ced-88b9-45d8-8019-1430483a0dcb")
 
 
     # 通过Client获取波形数据
@@ -842,7 +838,7 @@ if __name__ == '__main__':
     for trace in st:
         trace.plot()
 
-    # st1 = client.get_obspy_waveforms(station="I57*", startTime="2023-04-08 12:00:00", endTime="2023-04-08 12:00:01")
+    st1 = client.get_obspy_waveforms(network="IM", station="I57*", channel="BDF", startTime="2023-04-08 12:00:00", endTime="2023-04-08 12:00:01")
     # print(st1)
     # 通过Client去获取站点数据
     inventory = client.get_stations([1], [1], [1])

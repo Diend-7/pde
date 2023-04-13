@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
-setup(name='pde',
-      version='0.1',
+setup(name='map_pde',
+      version='0.2.1',
       description='A package can be used to access waveform data in the map system!',
       url='https://github.com/Diend-7/pde',
       author='WangPeiXian',

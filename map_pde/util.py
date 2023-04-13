@@ -19,7 +19,7 @@ from obspy.clients.fdsn.header import (FDSNException,
                                      FDSNUnauthorizedException,
                                      FDSNForbiddenException,
                                      FDSNInvalidRequestException)
-from constant import PARAMETER_ALIASES, DEFAULT_PARAMETERS
+from .constant import PARAMETER_ALIASES, DEFAULT_PARAMETERS
 from urllib.parse import urlencode
 from http.client import HTTPException, IncompleteRead
 from lxml import etree
