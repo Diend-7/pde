@@ -43,7 +43,7 @@ pip install map_pde
 
 ### 获取token
 
-去map_pde的网站注册获取token已用来获取数据，官网地址：http://10.99.12.109:38090
+去map_pde的网站注册获取token已用来获取数据，暂时还未开放
 
 登入之后去个人页面便可以获取自己的token
 
